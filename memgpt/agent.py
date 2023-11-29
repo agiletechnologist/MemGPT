@@ -36,19 +36,19 @@ def initialize_memory(ai_notes, human_notes):
     return memory
 
 
-def construct_system_with_memory(system, memory, memory_edit_timestamp, archival_memory=None, recall_memory=None):
+def construct_system_with_memory(system, memory, memory_edit_timestamp, archival_memory=None, recall_memory=None, include_char_count=True):
     full_system_message = "\n".join(
         [
             system,
             "\n",
-            f"### Memory [last modified: {memory_edit_timestamp}]",
+            f"### Memory [last modified: {memory_edit_timestamp.strip()}]",
             f"{len(recall_memory) if recall_memory else 0} previous messages between you and the user are stored in recall memory (use functions to access them)",
             f"{len(archival_memory) if archival_memory else 0} total memories you created are stored in archival memory (use functions to access them)",
             "\nCore memory shown below (limited in size, additional information stored in archival / recall memory):",
-            "<persona>",
+            f'<persona characters="{len(memory.persona)}/{memory.persona_char_limit}">' if include_char_count else "<persona>",
             memory.persona,
             "</persona>",
-            "<human>",
+            f'<human characters="{len(memory.human)}/{memory.human_char_limit}">' if include_char_count else "<human>",
             memory.human,
             "</human>",
         ]
@@ -515,10 +515,14 @@ class Agent(object):
             try:
                 function_args["self"] = self  # need to attach self to arg since it's dynamically linked
                 function_response_string = function_to_call(**function_args)
+                function_args.pop("self", None)
                 function_response = package_function_response(True, function_response_string)
                 function_failed = False
             except Exception as e:
-                error_msg = f"Error calling function {function_name} with args {function_args}: {str(e)}"
+                function_args.pop("self", None)
+                # error_msg = f"Error calling function {function_name} with args {function_args}: {str(e)}"
+                # Less detailed - don't provide full args, idea is that it should be in recent context so no need (just adds noise)
+                error_msg = f"Error calling function {function_name}: {str(e)}"
                 error_msg_user = f"{error_msg}\n{traceback.format_exc()}"
                 printd(error_msg_user)
                 function_response = package_function_response(False, error_msg)
