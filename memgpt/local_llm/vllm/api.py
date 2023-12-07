@@ -4,11 +4,11 @@ import requests
 
 from ..utils import load_grammar_file, count_tokens
 
-WEBUI_API_SUFFIX = "/completions"
+WEBUI_API_SUFFIX = "/v1/completions"
 DEBUG = False
 
 
-def get_vllm_completion(endpoint, model, prompt, context_window, settings={}, grammar=None):
+def get_vllm_completion(endpoint, model, prompt, context_window, user, settings={}, grammar=None):
     """https://github.com/vllm-project/vllm/blob/main/examples/api_client.py"""
     prompt_tokens = count_tokens(prompt)
     if prompt_tokens > context_window:
@@ -19,6 +19,7 @@ def get_vllm_completion(endpoint, model, prompt, context_window, settings={}, gr
     request["prompt"] = prompt
     request["max_tokens"] = int(context_window - prompt_tokens)
     request["stream"] = False
+    request["user"] = user
 
     # currently hardcoded, since we are only supporting one model with the hosted endpoint
     request["model"] = model

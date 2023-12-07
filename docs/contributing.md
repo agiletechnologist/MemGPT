@@ -5,7 +5,7 @@ To install MemGPT from source, start by cloning the repo:
 git clone git@github.com:cpacker/MemGPT.git
 ```
 
-### Installing dependencies with poetry** (recommended)
+### Installing dependencies with poetry (recommended)
 
 First, install Poetry using [the official instructions here](https://python-poetry.org/docs/#installation).
 
@@ -13,7 +13,7 @@ Once Poetry is installed, navigate to the MemGPT directory and install the MemGP
 ```shell
 cd MemGPT
 poetry shell
-poetry install -E dev -E postgres -E local -E legacy
+poetry install -E dev -E postgres -E local 
 ```
 
 Now when you want to use `memgpt`, make sure you first activate the `poetry` environment using poetry shell:
@@ -38,7 +38,7 @@ python3 -m venv venv
 
 Once you've activated your virtual environment and are in the MemGPT project directory, you can install the dependencies with `pip`:
 ```shell
-pip install -e '.[dev,postgres,local,legacy]'
+pip install -e '.[dev,postgres,local]'
 ```
 
 Now, you should be able to run `memgpt` from the command-line using the downloaded source code (if you used a virtual environment, you have to activate the virtual environment to access `memgpt`):

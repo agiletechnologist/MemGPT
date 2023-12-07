@@ -5,21 +5,20 @@ import json
 import traceback
 
 from memgpt.persistence_manager import LocalStateManager
-from memgpt.config import AgentConfig
-from .system import get_login_event, package_function_response, package_summarize_message, get_initial_boot_messages
-from .memory import CoreMemory as Memory, summarize_messages
-from .openai_tools import completions_with_backoff as create
-from memgpt.openai_tools import chat_completion_with_backoff
-from .utils import get_local_time, parse_json, united_diff, printd, count_tokens, get_schema_diff
-from .constants import (
+from memgpt.config import AgentConfig, MemGPTConfig
+from memgpt.system import get_login_event, package_function_response, package_summarize_message, get_initial_boot_messages
+from memgpt.memory import CoreMemory as Memory, summarize_messages
+from memgpt.openai_tools import create, is_context_overflow_error
+from memgpt.utils import get_local_time, parse_json, united_diff, printd, count_tokens, get_schema_diff
+from memgpt.constants import (
     FIRST_MESSAGE_ATTEMPTS,
-    MAX_PAUSE_HEARTBEATS,
     MESSAGE_SUMMARY_WARNING_FRAC,
     MESSAGE_SUMMARY_TRUNC_TOKEN_FRAC,
     MESSAGE_SUMMARY_TRUNC_KEEP_N_LAST,
     CORE_MEMORY_HUMAN_CHAR_LIMIT,
     CORE_MEMORY_PERSONA_CHAR_LIMIT,
     LLM_MAX_TOKENS,
+    CLI_WARNING_PREFIX,
 )
 from .errors import LLMError
 from .functions.functions import load_all_function_sets
@@ -114,6 +113,7 @@ class Agent(object):
     ):
         # agent config
         self.config = config
+
         # gpt-4, gpt-3.5-turbo
         self.model = model
         # Store the system instructions (used to rebuild memory)
@@ -258,6 +258,9 @@ class Agent(object):
 
         timestamp = get_local_time().replace(" ", "_").replace(":", "_")
         agent_name = self.config.name  # TODO: fix
+
+        # save config
+        self.config.save()
 
         # save agent state
         filename = f"{timestamp}.json"
@@ -424,7 +427,8 @@ class Agent(object):
             printd(f"First message didn't include function call: {response_message}")
             return False
 
-        function_name = response_message["function_call"]["name"]
+        function_call = response_message.get("function_call")
+        function_name = function_call.get("name") if function_call is not None else ""
         if require_send_message and function_name != "send_message" and function_name != "archival_memory_search":
             printd(f"First message function call wasn't send_message or archival_memory_search: {response_message}")
             return False
@@ -506,7 +510,7 @@ class Agent(object):
             heartbeat_request = function_args.pop("request_heartbeat", None)
             if not (isinstance(heartbeat_request, bool) or heartbeat_request is None):
                 printd(
-                    f"Warning: 'request_heartbeat' arg parsed was not a bool or None, type={type(heartbeat_request)}, value={heartbeat_request}"
+                    f"{CLI_WARNING_PREFIX}'request_heartbeat' arg parsed was not a bool or None, type={type(heartbeat_request)}, value={heartbeat_request}"
                 )
                 heartbeat_request = None
 
@@ -569,7 +573,7 @@ class Agent(object):
                 input_message_sequence = self.messages
 
             if len(input_message_sequence) > 1 and input_message_sequence[-1]["role"] != "user":
-                printd(f"WARNING: attempting to run ChatCompletion without user as the last message in the queue")
+                printd(f"{CLI_WARNING_PREFIX}Attempting to run ChatCompletion without user as the last message in the queue")
 
             # Step 1: send the conversation and available functions to GPT
             if not skip_verify and (first_message or self.messages_total == self.messages_total_init):
@@ -621,7 +625,7 @@ class Agent(object):
             # We can't do summarize logic properly if context_window is undefined
             if self.config.context_window is None:
                 # Fallback if for some reason context_window is missing, just set to the default
-                print(f"WARNING: could not find context_window in config, setting to default {LLM_MAX_TOKENS['DEFAULT']}")
+                print(f"{CLI_WARNING_PREFIX}could not find context_window in config, setting to default {LLM_MAX_TOKENS['DEFAULT']}")
                 print(f"{self.config}")
                 self.config.context_window = (
                     str(LLM_MAX_TOKENS[self.model])
@@ -630,7 +634,7 @@ class Agent(object):
                 )
             if current_total_tokens > MESSAGE_SUMMARY_WARNING_FRAC * int(self.config.context_window):
                 printd(
-                    f"WARNING: last response total_tokens ({current_total_tokens}) > {MESSAGE_SUMMARY_WARNING_FRAC * int(self.config.context_window)}"
+                    f"{CLI_WARNING_PREFIX}last response total_tokens ({current_total_tokens}) > {MESSAGE_SUMMARY_WARNING_FRAC * int(self.config.context_window)}"
                 )
                 # Only deliver the alert if we haven't already (this period)
                 if not self.agent_alerted_about_memory_pressure:
@@ -648,14 +652,14 @@ class Agent(object):
             printd(f"step() failed\nuser_message = {user_message}\nerror = {e}")
 
             # If we got a context alert, try trimming the messages length, then try again
-            if "maximum context length" in str(e):
+            if is_context_overflow_error(e):
                 # A separate API call to run a summarizer
                 self.summarize_messages_inplace()
 
                 # Try step again
                 return self.step(user_message, first_message=first_message)
             else:
-                printd(f"step() failed with openai.InvalidRequestError, but didn't recognize the error message: '{str(e)}'")
+                printd(f"step() failed with an unrecognized exception: '{str(e)}'")
                 raise e
 
     def summarize_messages_inplace(self, cutoff=None, preserve_last_N_messages=True):
@@ -713,7 +717,7 @@ class Agent(object):
         # We can't do summarize logic properly if context_window is undefined
         if self.config.context_window is None:
             # Fallback if for some reason context_window is missing, just set to the default
-            print(f"WARNING: could not find context_window in config, setting to default {LLM_MAX_TOKENS['DEFAULT']}")
+            print(f"{CLI_WARNING_PREFIX}could not find context_window in config, setting to default {LLM_MAX_TOKENS['DEFAULT']}")
             print(f"{self.config}")
             self.config.context_window = (
                 str(LLM_MAX_TOKENS[self.model])
@@ -758,35 +762,9 @@ class Agent(object):
         function_call="auto",
     ):
         """Get response from LLM API"""
-
-        # TODO: Legacy code - delete
-        if self.config is None:
-            try:
-                response = create(
-                    model=self.model,
-                    context_window=self.context_window,
-                    messages=message_sequence,
-                    functions=self.functions,
-                    function_call=function_call,
-                )
-
-                # special case for 'length'
-                if response.choices[0].finish_reason == "length":
-                    raise Exception("Finish reason was length (maximum context length)")
-
-                # catches for soft errors
-                if response.choices[0].finish_reason not in ["stop", "function_call"]:
-                    raise Exception(f"API call finish with bad finish reason: {response}")
-
-                # unpack with response.choices[0].message.content
-                return response
-            except Exception as e:
-                raise e
-
         try:
-            response = chat_completion_with_backoff(
+            response = create(
                 agent_config=self.config,
-                model=self.model,  # TODO: remove (is redundant)
                 messages=message_sequence,
                 functions=self.functions,
                 function_call=function_call,

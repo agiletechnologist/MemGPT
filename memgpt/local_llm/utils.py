@@ -6,6 +6,7 @@ import memgpt.local_llm.llm_chat_completion_wrappers.dolphin as dolphin
 import memgpt.local_llm.llm_chat_completion_wrappers.zephyr as zephyr
 
 
+# deprecated for Box
 class DotDict(dict):
     """Allow dot access on properties similar to OpenAI response object"""
 
