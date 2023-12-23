@@ -9,7 +9,7 @@ from memgpt.config import AgentConfig, MemGPTConfig
 from memgpt.system import get_login_event, package_function_response, package_summarize_message, get_initial_boot_messages
 from memgpt.memory import CoreMemory as Memory, summarize_messages
 from memgpt.openai_tools import create, is_context_overflow_error
-from memgpt.utils import get_local_time, parse_json, united_diff, printd, count_tokens, get_schema_diff
+from memgpt.utils import get_local_time, parse_json, united_diff, printd, count_tokens, get_schema_diff, validate_function_response
 from memgpt.constants import (
     FIRST_MESSAGE_ATTEMPTS,
     MESSAGE_SUMMARY_WARNING_FRAC,
@@ -518,7 +518,8 @@ class Agent(object):
             self.interface.function_message(f"Running {function_name}({function_args})")
             try:
                 function_args["self"] = self  # need to attach self to arg since it's dynamically linked
-                function_response_string = function_to_call(**function_args)
+                function_response = function_to_call(**function_args)
+                function_response_string = validate_function_response(function_response)
                 function_args.pop("self", None)
                 function_response = package_function_response(True, function_response_string)
                 function_failed = False
@@ -593,6 +594,7 @@ class Agent(object):
                 while True:
                     response = self.get_ai_reply(
                         message_sequence=input_message_sequence,
+                        first_message=True,  # passed through to the prompt formatter
                     )
                     if self.verify_first_message_correctness(response, require_monologue=self.first_message_verify_mono):
                         break
@@ -723,7 +725,13 @@ class Agent(object):
             pass
 
         message_sequence_to_summarize = self.messages[1:cutoff]  # do NOT get rid of the system message
-        printd(f"Attempting to summarize {len(message_sequence_to_summarize)} messages [1:{cutoff}] of {len(self.messages)}")
+        if len(message_sequence_to_summarize) == 1:
+            # This prevents a potential infinite loop of summarizing the same message over and over
+            raise LLMError(
+                f"Summarize error: tried to run summarize, but couldn't find enough messages to compress [len={len(message_sequence_to_summarize)} <= 1]"
+            )
+        else:
+            printd(f"Attempting to summarize {len(message_sequence_to_summarize)} messages [1:{cutoff}] of {len(self.messages)}")
 
         # We can't do summarize logic properly if context_window is undefined
         if self.config.context_window is None:
@@ -771,6 +779,7 @@ class Agent(object):
         self,
         message_sequence,
         function_call="auto",
+        first_message=False,  # hint
     ):
         """Get response from LLM API"""
         try:
@@ -779,6 +788,8 @@ class Agent(object):
                 messages=message_sequence,
                 functions=self.functions,
                 function_call=function_call,
+                # hint
+                first_message=first_message,
             )
             # special case for 'length'
             if response.choices[0].finish_reason == "length":
